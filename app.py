@@ -1,5 +1,5 @@
 # ==========================================
-# DASHBOARD FINANCIERO COMPLETO
+# DASHBOARD FINANCIERO PROFESIONAL COMPLETO
 # ==========================================
 import streamlit as st
 import yfinance as yf
@@ -9,9 +9,6 @@ from scipy.stats import norm
 import statsmodels.api as sm
 import matplotlib.pyplot as plt
 
-# ==========================================
-# CONFIGURACIÓN
-# ==========================================
 st.set_page_config(layout="wide")
 st.title("📊 Dashboard Financiero Profesional")
 
@@ -20,98 +17,122 @@ st.title("📊 Dashboard Financiero Profesional")
 # ==========================================
 st.sidebar.header("Configuración")
 
-tickers = st.sidebar.text_input("Activos (separados por coma)", "AAPL,MSFT,GOOGL")
+tickers = st.sidebar.text_input("Activos", "AAPL,MSFT,GOOGL")
 benchmark = st.sidebar.text_input("Benchmark", "^GSPC")
 
-start = st.sidebar.date_input("Fecha inicio", pd.to_datetime("2020-01-01"))
-end = st.sidebar.date_input("Fecha fin", pd.to_datetime("today"))
+start = st.sidebar.date_input("Inicio", pd.to_datetime("2020-01-01"))
+end = st.sidebar.date_input("Fin", pd.to_datetime("today"))
 
-rf = st.sidebar.number_input("Tasa libre de riesgo (%)", value=5.0)/100
-capital = st.sidebar.number_input("Capital", value=100000)
-alpha = st.sidebar.number_input("Nivel significancia α", value=0.05)
-horizon = st.sidebar.number_input("Plazo (días)", value=1)
+rf = st.sidebar.number_input("Tasa libre (%)", 5.0)/100
+capital = st.sidebar.number_input("Capital", 100000)
+alpha = st.sidebar.number_input("Nivel significancia α", 0.05)
+horizon = st.sidebar.number_input("Plazo (días)", 1)
 
 confidence = 1 - alpha
 z_value = norm.ppf(confidence)
 
-symbols = [t.strip() for t in tickers.split(",")]
+symbols = [x.strip() for x in tickers.split(",")]
 
 # ==========================================
-# DESCARGA DE DATOS
+# DESCARGA ROBUSTA
 # ==========================================
-data = yf.download(symbols + [benchmark], start=start, end=end)["Adj Close"]
+try:
+    raw = yf.download(symbols + [benchmark], start=start, end=end)
+
+    if raw.empty:
+        st.error("No hay datos, revisa tickers")
+        st.stop()
+
+    if isinstance(raw.columns, pd.MultiIndex):
+        if "Adj Close" in raw.columns.levels[0]:
+            data = raw["Adj Close"]
+        else:
+            data = raw["Close"]
+    else:
+        if "Adj Close" in raw.columns:
+            data = raw["Adj Close"]
+        else:
+            data = raw["Close"]
+
+except:
+    st.error("Error descargando datos")
+    st.stop()
+
+if benchmark not in data.columns:
+    st.error("Benchmark inválido")
+    st.stop()
+
 returns = data.pct_change().dropna()
 benchmark_returns = returns[benchmark]
 
 # ==========================================
 # FUNCIONES
 # ==========================================
-def annualized_return(r):
+def ann_return(r):
     return (1 + r.mean())**252 - 1
 
-def annualized_volatility(r):
+def ann_vol(r):
     return r.std() * np.sqrt(252)
-
-def max_drawdown(r):
-    cum = (1 + r).cumprod()
-    peak = cum.cummax()
-    return (cum - peak).min()
 
 # ==========================================
 # TABS
 # ==========================================
 tab1, tab2, tab3, tab4 = st.tabs(
-    ["Indicadores", "Benchmark", "Matrices", "CAPM (Regresión)"]
+    ["Indicadores", "Benchmark", "Matrices", "CAPM Regresión"]
 )
 
 # ==========================================
-# TAB 1: INDICADORES COMPLETOS
+# INDICADORES
 # ==========================================
 with tab1:
+
     st.subheader("Indicadores por activo")
 
-    metrics = pd.DataFrame()
+    df = pd.DataFrame()
 
-    for col in symbols:
-        r = returns[col]
+    for asset in symbols:
 
-        mean_daily = r.mean()
-        vol_daily = r.std()
+        if asset not in returns.columns:
+            continue
 
-        ann_return = annualized_return(r)
-        ann_vol = annualized_volatility(r)
+        r = returns[asset]
+
+        mean_d = r.mean()
+        vol_d = r.std()
+
+        r_ann = ann_return(r)
+        vol_ann = ann_vol(r)
 
         beta = np.cov(r, benchmark_returns)[0][1] / np.var(benchmark_returns)
         corr = np.corrcoef(r, benchmark_returns)[0][1]
 
-        sharpe = (ann_return - rf) / ann_vol if ann_vol != 0 else np.nan
-        treynor = (ann_return - rf) / beta if beta != 0 else np.nan
+        sharpe = (r_ann - rf) / vol_ann if vol_ann != 0 else np.nan
+        treynor = (r_ann - rf) / beta if beta != 0 else np.nan
 
-        capm = rf + beta * (annualized_return(benchmark_returns) - rf)
+        capm = rf + beta * (ann_return(benchmark_returns) - rf)
 
-        var = z_value * vol_daily * np.sqrt(horizon) * capital
+        var = z_value * vol_d * np.sqrt(horizon) * capital
         var_pct = var / capital
 
-        metrics.loc[col, "Rentabilidad diaria"] = mean_daily
-        metrics.loc[col, "Volatilidad diaria"] = vol_daily
-        metrics.loc[col, "Rentabilidad anualizada"] = ann_return
-        metrics.loc[col, "Volatilidad anualizada"] = ann_vol
-        metrics.loc[col, "iSharpe"] = sharpe
-        metrics.loc[col, "Coef. Correlación Pearson"] = corr
-        metrics.loc[col, "BETA"] = beta
-        metrics.loc[col, "iTraynor"] = treynor
-        metrics.loc[col, "CAPM"] = capm
-        metrics.loc[col, "Tasa Libre de Riesgo"] = rf
-        metrics.loc[col, "Capital"] = capital
-        metrics.loc[col, "Intervalo Confianza"] = confidence
-        metrics.loc[col, "Nivel Significancia"] = alpha
-        metrics.loc[col, "Valor Z"] = z_value
-        metrics.loc[col, "Plazo"] = horizon
-        metrics.loc[col, "VaR"] = var
-        metrics.loc[col, "VaR %"] = var_pct
-        metrics.loc[col, "Max Drawdown"] = max_drawdown(r)
+        df.loc[asset, "Rentabilidad diaria"] = mean_d
+        df.loc[asset, "Volatilidad diaria"] = vol_d
+        df.loc[asset, "Rentabilidad anualizada"] = r_ann
+        df.loc[asset, "Volatilidad anualizada"] = vol_ann
+        df.loc[asset, "iSharpe"] = sharpe
+        df.loc[asset, "Coef. Correlación Pearson"] = corr
+        df.loc[asset, "BETA"] = beta
+        df.loc[asset, "iTraynor"] = treynor
+        df.loc[asset, "CAPM"] = capm
+        df.loc[asset, "Tasa Libre de Riesgo"] = rf
+        df.loc[asset, "Capital"] = capital
+        df.loc[asset, "Intervalo Confianza"] = confidence
+        df.loc[asset, "Nivel Significancia"] = alpha
+        df.loc[asset, "Valor Z"] = z_value
+        df.loc[asset, "Plazo"] = horizon
+        df.loc[asset, "VaR"] = var
+        df.loc[asset, "VaR %"] = var_pct
 
-    st.dataframe(metrics.style.format({
+    st.dataframe(df.style.format({
         "Rentabilidad diaria": "{:.4%}",
         "Volatilidad diaria": "{:.4%}",
         "Rentabilidad anualizada": "{:.2%}",
@@ -126,71 +147,78 @@ with tab1:
     }))
 
 # ==========================================
-# TAB 2: BENCHMARK
+# BENCHMARK
 # ==========================================
 with tab2:
-    st.subheader("Rendimientos acumulados vs Benchmark")
-    cumulative = (1 + returns).cumprod()
-    st.line_chart(cumulative)
+    st.subheader("Rendimientos acumulados")
+    cum = (1 + returns).cumprod()
+    st.line_chart(cum)
 
 # ==========================================
-# TAB 3: MATRICES
+# MATRICES
 # ==========================================
 with tab3:
-    st.subheader("Matriz de Correlación")
+    st.subheader("Correlación")
     st.dataframe(returns.corr())
 
-    st.subheader("Matriz de Covarianza")
+    st.subheader("Covarianza")
     st.dataframe(returns.cov())
 
 # ==========================================
-# TAB 4: CAPM CON REGRESIÓN
+# CAPM REGRESIÓN
 # ==========================================
 with tab4:
-    st.subheader("CAPM - Regresión OLS")
 
-    capm_results = pd.DataFrame()
+    st.subheader("CAPM OLS")
 
-    for col in symbols:
-        r_i = returns[col] - rf/252
+    capm_df = pd.DataFrame()
+
+    for asset in symbols:
+
+        if asset not in returns.columns:
+            continue
+
+        r_i = returns[asset] - rf/252
         r_m = benchmark_returns - rf/252
 
-        X = sm.add_constant(r_m)
-        model = sm.OLS(r_i, X).fit()
+        model = sm.OLS(r_i, sm.add_constant(r_m)).fit()
 
-        capm_results.loc[col, "Alpha"] = model.params["const"] * 252
-        capm_results.loc[col, "Beta"] = model.params[benchmark]
-        capm_results.loc[col, "p-value Beta"] = model.pvalues[benchmark]
-        capm_results.loc[col, "t-stat Beta"] = model.tvalues[benchmark]
-        capm_results.loc[col, "R²"] = model.rsquared
+        capm_df.loc[asset, "Alpha"] = model.params["const"] * 252
+        capm_df.loc[asset, "Beta"] = model.params[benchmark]
+        capm_df.loc[asset, "p-value"] = model.pvalues[benchmark]
+        capm_df.loc[asset, "t-stat"] = model.tvalues[benchmark]
+        capm_df.loc[asset, "R²"] = model.rsquared
 
-    st.dataframe(capm_results.style.format({
+    st.dataframe(capm_df.style.format({
         "Alpha": "{:.2%}",
         "Beta": "{:.2f}",
-        "p-value Beta": "{:.4f}",
-        "t-stat Beta": "{:.2f}",
+        "p-value": "{:.4f}",
+        "t-stat": "{:.2f}",
         "R²": "{:.2f}"
     }))
 
-    # GRÁFICO CAPM
+    # gráfico
     st.subheader("Gráfico CAPM")
 
-    asset = st.selectbox("Selecciona activo", symbols)
+    asset = st.selectbox("Activo", symbols)
 
-    r_i = returns[asset]
-    r_m = benchmark_returns
+    if asset in returns.columns:
 
-    model = sm.OLS(r_i, sm.add_constant(r_m)).fit()
-    alpha_val = model.params["const"]
-    beta_val = model.params[benchmark]
+        r_i = returns[asset]
+        r_m = benchmark_returns
 
-    x = np.linspace(r_m.min(), r_m.max(), 100)
-    y = alpha_val + beta_val * x
+        model = sm.OLS(r_i, sm.add_constant(r_m)).fit()
 
-    fig, ax = plt.subplots()
-    ax.scatter(r_m, r_i, alpha=0.3)
-    ax.plot(x, y, color="red")
-    ax.set_xlabel("Benchmark")
-    ax.set_ylabel("Activo")
+        alpha_val = model.params["const"]
+        beta_val = model.params[benchmark]
 
-    st.pyplot(fig)
+        x = np.linspace(r_m.min(), r_m.max(), 100)
+        y = alpha_val + beta_val * x
+
+        fig, ax = plt.subplots()
+        ax.scatter(r_m, r_i, alpha=0.3)
+        ax.plot(x, y, color="red")
+        ax.set_xlabel("Benchmark")
+        ax.set_ylabel("Activo")
+
+        st.pyplot(fig)
